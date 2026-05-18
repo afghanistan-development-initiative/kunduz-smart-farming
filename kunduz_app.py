@@ -54,10 +54,15 @@ div[data-testid="metric-container"] {
 @st.cache_resource
 def init_gee():
     try:
-        ee.Initialize()
-    except Exception:
-        ee.Authenticate()
-        ee.Initialize()
+        service_account = st.secrets["gee"]["service_account"]
+        private_key = st.secrets["gee"]["private_key"]
+        credentials = ee.ServiceAccountCredentials(
+            service_account, key_data=private_key
+        )
+        ee.Initialize(credentials)
+    except Exception as e:
+        st.error(f"GEE authentication failed: {e}")
+        st.stop()
 
 init_gee()
 
