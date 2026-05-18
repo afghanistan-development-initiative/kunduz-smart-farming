@@ -1,5 +1,4 @@
 earthengine-api>=0.1.370
-geemap>=0.29.0
 pandas>=2.0.0
 plotly>=5.18.0
 folium>=0.15.0
