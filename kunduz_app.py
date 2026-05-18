@@ -706,52 +706,184 @@ with tab4:
 # ═══════════════════════════════════════════════════
 with tab5:
     st.subheader(f"Live Satellite Map — {region_name} · {map_year}")
-    st.info("Map loads GEE tile layer directly. Select layer and year in sidebar.")
 
-    bbox_map = PROVINCES[region_name]["bbox"] if location_mode=="Province" else PROVINCES["Kunduz"]["bbox"]
+    bbox_map   = PROVINCES[region_name]["bbox"]   if location_mode=="Province" else PROVINCES["Kunduz"]["bbox"]
     center_map = PROVINCES[region_name]["center"] if location_mode=="Province" else [36.73, 68.87]
 
-    if st.button("🗺️ Load Live Map", type="primary"):
-        with st.spinner("Loading satellite tiles from GEE..."):
+    # Layer selector — inline buttons for user friendliness
+    st.markdown("**Select layers to display:**")
+    layer_cols = st.columns(6)
+    show_ndvi     = layer_cols[0].checkbox("🌿 NDVI",       value=True)
+    show_water    = layer_cols[1].checkbox("💧 Water",      value=True)
+    show_truecolor= layer_cols[2].checkbox("🗺️ True Color", value=False)
+    show_falsecolor=layer_cols[3].checkbox("🔴 False Color",value=False)
+    show_rainfall = layer_cols[4].checkbox("🌧️ Rainfall",  value=False)
+    show_boundary = layer_cols[5].checkbox("📦 Boundary",   value=True)
+
+    # Year selector inline
+    col_yr, col_btn = st.columns([3,1])
+    with col_yr:
+        selected_year_map = st.select_slider(
+            "Year", options=YEARS, value=map_year
+        )
+    with col_btn:
+        st.markdown("<br>", unsafe_allow_html=True)
+        load_map = st.button("🗺️ Load Map", type="primary", use_container_width=True)
+
+    # Legend
+    st.markdown("""
+    <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:#6b8f65;margin-bottom:8px">
+        <span>🟢 High NDVI = healthy crops</span>
+        <span>🔴 Low NDVI = stressed/bare</span>
+        <span>🔵 Water surfaces</span>
+        <span>🟡 Region boundary</span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Always show map — store in session state so it persists
+    if load_map or "map_html" not in st.session_state:
+        with st.spinner("Loading satellite layers from GEE..."):
             try:
                 region_ee = ee.Geometry.Rectangle(bbox_map)
-                s2 = get_s2(region_ee, map_year)
+                s2 = get_s2(region_ee, selected_year_map)
 
-                VIS = {
-                    "NDVI":         (s2.normalizedDifference(["B8","B4"]),
-                                     {"min":0,"max":0.7,"palette":["#d73027","#fee08b","#1a9850"]}),
-                    "Water (MNDWI)":(s2.normalizedDifference(["B3","B11"]),
-                                     {"min":-0.3,"max":0.5,"palette":["#8B4513","#ffffcc","#0077b6"]}),
-                    "True Color":   (s2,{"bands":["B4","B3","B2"],"min":0,"max":2500,"gamma":1.4}),
-                    "False Color":  (s2,{"bands":["B8","B4","B3"],"min":0,"max":4000,"gamma":1.3}),
-                }
+                # Build map
+                m = folium.Map(
+                    location=center_map,
+                    zoom_start=11,
+                    tiles="CartoDB dark_matter"
+                )
 
-                img, vis = VIS[map_layer]
-                tile_url = get_tile_url(img, vis)
-
-                m = folium.Map(location=center_map, zoom_start=11,
-                               tiles="CartoDB dark_matter")
+                # Add satellite base
                 folium.TileLayer(
-                    tiles=tile_url,
-                    attr="Google Earth Engine · Sentinel-2",
-                    name=f"{map_layer} {map_year}",
-                    overlay=True
+                    tiles="https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+                    attr="Google Satellite",
+                    name="Google Satellite",
+                    overlay=False
                 ).add_to(m)
 
-                # Add region box
-                folium.Rectangle(
-                    bounds=[[bbox_map[1],bbox_map[0]],[bbox_map[3],bbox_map[2]]],
-                    color="#fbbf24", fill=False, weight=2,
-                    tooltip=f"{region_name} 40×40km"
-                ).add_to(m)
+                # NDVI layer
+                if show_ndvi:
+                    ndvi = s2.normalizedDifference(["B8","B4"])
+                    ndvi_url = get_tile_url(ndvi, {
+                        "min":0, "max":0.7,
+                        "palette":["#d73027","#fc8d59","#fee08b","#d9ef8b","#91cf60","#1a9850"]
+                    })
+                    folium.TileLayer(
+                        tiles=ndvi_url,
+                        attr="GEE Sentinel-2 NDVI",
+                        name=f"🌿 NDVI {selected_year_map}",
+                        overlay=True
+                    ).add_to(m)
 
-                folium.LayerControl().add_to(m)
-                st_folium(m, width=None, height=500, key="live_map")
-                st.success(f"Showing {map_layer} for {map_year}")
+                # Water layer
+                if show_water:
+                    mndwi = s2.normalizedDifference(["B3","B11"])
+                    water_mask = mndwi.gt(0.05).selfMask()
+                    water_url = get_tile_url(water_mask, {
+                        "min":0, "max":1,
+                        "palette":["#0077b6"]
+                    })
+                    folium.TileLayer(
+                        tiles=water_url,
+                        attr="GEE Sentinel-2 Water",
+                        name=f"💧 Water {selected_year_map}",
+                        overlay=True
+                    ).add_to(m)
+
+                # True Color
+                if show_truecolor:
+                    tc_url = get_tile_url(s2, {
+                        "bands":["B4","B3","B2"],
+                        "min":0, "max":2500, "gamma":1.4
+                    })
+                    folium.TileLayer(
+                        tiles=tc_url,
+                        attr="GEE Sentinel-2 True Color",
+                        name=f"🗺️ True Color {selected_year_map}",
+                        overlay=True
+                    ).add_to(m)
+
+                # False Color (crops appear bright red)
+                if show_falsecolor:
+                    fc_url = get_tile_url(s2, {
+                        "bands":["B8","B4","B3"],
+                        "min":0, "max":4000, "gamma":1.3
+                    })
+                    folium.TileLayer(
+                        tiles=fc_url,
+                        attr="GEE Sentinel-2 False Color",
+                        name=f"🔴 False Color {selected_year_map}",
+                        overlay=True
+                    ).add_to(m)
+
+                # Rainfall
+                if show_rainfall:
+                    rain = (ee.ImageCollection("UCSB-CHG/CHIRPS/DAILY")
+                            .filterBounds(region_ee)
+                            .filterDate(f"{selected_year_map}-01-01",
+                                        f"{selected_year_map}-12-31")
+                            .select("precipitation").sum().clip(region_ee))
+                    rain_url = get_tile_url(rain, {
+                        "min":50, "max":500,
+                        "palette":["#ffffcc","#a1dab4","#41b6c4","#2c7fb8","#253494"]
+                    })
+                    folium.TileLayer(
+                        tiles=rain_url,
+                        attr="CHIRPS Rainfall",
+                        name=f"🌧️ Rainfall {selected_year_map}",
+                        overlay=True
+                    ).add_to(m)
+
+                # Region boundary
+                if show_boundary:
+                    folium.Rectangle(
+                        bounds=[[bbox_map[1],bbox_map[0]],
+                                [bbox_map[3],bbox_map[2]]],
+                        color="#fbbf24",
+                        fill=False,
+                        weight=2,
+                        dash_array="8",
+                        tooltip=f"{region_name} — 40×40 km study region"
+                    ).add_to(m)
+
+                # Province markers
+                for pname, pdata in PROVINCES.items():
+                    pb = pdata["bbox"]
+                    pc = pdata["center"]
+                    folium.Marker(
+                        location=pc,
+                        tooltip=pname,
+                        icon=folium.Icon(
+                            color="green" if pname==region_name else "gray",
+                            icon="leaf" if pname==region_name else "info-sign",
+                            prefix="glyphicon"
+                        )
+                    ).add_to(m)
+
+                # Layer control
+                folium.LayerControl(collapsed=False).add_to(m)
+
+                # Store map in session state so it persists
+                st.session_state["map_obj"] = m
+                st.session_state["map_year_loaded"] = selected_year_map
+                st.success(f"✓ Loaded {selected_year_map} — use layer control (top right of map) to toggle layers")
 
             except Exception as e:
                 st.error(f"Map error: {e}")
-                st.info("Make sure GEE is authenticated and the service account has Earth Engine access.")
+
+    # Always render map from session state
+    if "map_obj" in st.session_state:
+        st.caption(f"Year loaded: {st.session_state.get('map_year_loaded', map_year)} · Use ☰ layer control on map to toggle · Zoom with scroll wheel")
+        st_folium(
+            st.session_state["map_obj"],
+            width=None,
+            height=600,
+            key="persistent_map",
+            returned_objects=[]
+        )
+    else:
+        st.info("Click '🗺️ Load Map' to display the satellite layers.")
 
 # ═══════════════════════════════════════════════════
 # TAB 6 — AI ASSISTANT
